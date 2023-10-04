@@ -1,14 +1,23 @@
-
-use core::panic;
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_s3::{Client, Error};
+use whois_rust::{WhoIs, WhoIsLookupOptions};
 use std::path::Path;
-use std::env;
 use std::io::{self, BufRead, Write};
 use std::fs;
 use std::fs::File;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use ipinfo::{IpInfo, IpInfoConfig};
-use color_eyre::eyre::Result;
+
+const WHOIS_SERVERS: &str = r#"{
+    "org": "whois.pir.org",
+    "": "whois.ripe.net",
+    "_": {
+        "ip": {
+            "host": "whois.arin.net",
+            "query": "n + $addr\r\n"
+        }
+    }
+}"#;
 
 // Taken from the rust-by-example book: https://doc.rust-lang.org/stable/rust-by-example/std_misc/file/read_lines.html
 // The output is wrapped in a Result to allow matching on errors
@@ -36,26 +45,18 @@ fn from_line(line: String) -> Option<Ipv4Addr> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    if let Err(e) = color_eyre::install() {
-        panic!("Could not install color_eyre: {}", e);
-    }
-    let ipinfo_token = env::var("IPINFO_TOKEN").expect(
-        "Set IPINFO_TOKEN with token from https://ipinfo.io/ "
-    );
-    let config = IpInfoConfig {
-        token: Some(ipinfo_token),
-        ..Default::default()
-    };
-    let mut ipinfo = IpInfo::new(config)
-        .expect("should construct");
+async fn main() -> Result<(), Error> {
+    let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
+    let config = aws_config::from_env().region(region_provider).load().await;
+    let client = aws_sdk_s3::Client::new(&config);
+    let bucketlist = client.list_buckets().send().await?;
+    println!("{:#?}", bucketlist);
+
+    return Ok(());
 
     let mut address_counts: HashMap<Ipv4Addr, u32> = HashMap::new();
     let mut addresses = 0;
-    let logdir = env::var("LOGDIR").expect(
-        "Set LOGDIR to path to loadbalancer logfiles"
-    );
-    for rd in fs::read_dir(logdir).unwrap() {
+    for rd in fs::read_dir("/home/msch/src/oversize/lb-analyzer/s3/").unwrap() {
         if let Ok(direntry) = rd {
             let path_buf = direntry.path();
             let filename = path_buf.to_str().unwrap();
@@ -82,56 +83,41 @@ async fn main() -> Result<()> {
     let mut address_vec: Vec<(&Ipv4Addr, &u32)> = address_counts.iter().filter(|w| w.1 > &100).collect();
     // Sort the vector so that the highest occurences are first
     address_vec.sort_by(|a, b| b.1.cmp(a.1));
+    // Take the top ten
+    let (top_ten, _) = address_vec.split_at(10);
+    println!("{:?}", address_vec);
+    println!("Adresses: {}", addresses);
+    println!("Unique adresses: {}", address_counts.len());
 
-    // Take the top
-    let (top_, rest) = address_vec.split_at(100);
-    //println!("{:?}", address_vec);
-    //println!("Adresses: {}", addresses);
-    //println!("Unique adresses: {}", address_counts.len());
-
-    let mut out_lines_csv: Vec<String> = Vec::new();
-
-    // There also is a batch lookup option
-    // ipinfo.lookup_batch(ips, batch_config);
-    for v in top_ {
-        let ipinfo_result =  ipinfo.lookup(&v.0.to_string()).await;
-        match ipinfo_result {
-            Ok(ipinfo_details) => {
-                // println!("{:?}", ipinfo_details);
-                let mut l = String::new();
-                // IP, Count
-                l.push_str(&format!("{}, {}, ", v.0, v.1));
-                // Country Name
-                if let Some(country_name) = ipinfo_details.country_name {
-                    l.push_str(&format!("{}, ", country_name));
+    /*
+    let whois = WhoIs::from_string(WHOIS_SERVERS).unwrap();
+    for t in top_ten.iter() {
+        println!("{:?}", t);
+        let opts = WhoIsLookupOptions::from_string(t.0.to_string()).unwrap();
+        if let Ok(ripe_string) = whois.lookup(opts) {
+            // println!("{:?}", ripe_string);
+            let lines = ripe_string.split("\n");
+            // println!("{:?}", lines);
+            for line in lines.into_iter() {
+                println!("{:?}", line);
+                if line.contains("descr:") {
+                    let name = line.split(":").into_iter().nth(1).unwrap();
+                    println!("{}", name);
+                    continue;
                 }
-                // City
-                l.push_str(&format!("{}, ", ipinfo_details.city));
-                // hostname
-                if let Some(hostname) = ipinfo_details.hostname {
-                    l.push_str(&format!("{}", hostname));
-                }
-                // Org
-                if let Some(org) = ipinfo_details.org {
-                    l.push_str(&format!("{}, ", org));
-                }
-                out_lines_csv.push(format!("{}\n", l));
-            },
-            Err(e) => println!("Error occured: {}", e)
+            }
         }
     }
+    */
 
-    // println!("Top Ten {:#?}", top_);
-    // println!("Top Ten {:#?}", top_.len());
-
-    for v in rest.iter() {
-        out_lines_csv.push(format!("{}, {}, -, -, -, -,\n", v.0, v.1));
-    }
-
+    // println!("Top Ten {:#?}", top_ten);
+    // println!("Top Ten {:#?}", top_ten.len());
+    /*
     let mut outfile = File::create("out.csv").unwrap();
-    for l in out_lines_csv {
-        if let Ok(_) = write!(outfile, "{}", l) {}
+    for (k, v) in address_vec.iter().enumerate() {
+        if let Ok(_) = writeln!(outfile, "{}, {}", v.0, v.1) {}
     }
+    */
 
     Ok(())
 }

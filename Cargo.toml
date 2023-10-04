@@ -6,7 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+# aws-config = "0.56.1"
+# aws-sdk-s3 = "0.31.2"
 bacon = "2.13.0"
 color-eyre = "0.6.2"
+ipinfo = "2.2.0"
 tokio = { version = "1.32.0", features = ["full"] }
-whois-rust = "1.5.2"
+
