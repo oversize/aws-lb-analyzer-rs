@@ -51,7 +51,9 @@ async fn main() -> Result<()> {
         .expect("should construct");
 
     let mut address_counts: HashMap<Ipv4Addr, u32> = HashMap::new();
-    let mut addresses = 0;
+
+    let mut total_files = 0;
+    let mut total_lines = 0;
     let logdir = env::var("LOGDIR").expect(
         "Set LOGDIR to path to loadbalancer logfiles"
     );
@@ -64,17 +66,18 @@ async fn main() -> Result<()> {
                 for line in lines {
                     if let Ok(line) = line {
                         if let Some(ip) = from_line(line) {
-                            addresses += 1;
                             if let Some(previous_count) = address_counts.get(&ip) {
                                 address_counts.insert(ip, previous_count + 1);
                             } else {
                                 address_counts.insert(ip, 1);
                             }
                         }
+                        total_lines += 1;
                     }
                 }
             }
         }
+        total_files += 1;
     }
     // Finished processing Files
 
@@ -83,17 +86,13 @@ async fn main() -> Result<()> {
     // Sort the vector so that the highest occurences are first
     address_vec.sort_by(|a, b| b.1.cmp(a.1));
 
-    // Take the top
+    // Take the top 100
     let (top_, rest) = address_vec.split_at(100);
-    //println!("{:?}", address_vec);
-    //println!("Adresses: {}", addresses);
-    //println!("Unique adresses: {}", address_counts.len());
-
     let mut out_lines_csv: Vec<String> = Vec::new();
 
-    // There also is a batch lookup option
-    // ipinfo.lookup_batch(ips, batch_config);
     for v in top_ {
+        // There also is a batch lookup option
+        // ipinfo.lookup_batch(ips, batch_config);
         let ipinfo_result =  ipinfo.lookup(&v.0.to_string()).await;
         match ipinfo_result {
             Ok(ipinfo_details) => {
@@ -121,9 +120,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    // println!("Top Ten {:#?}", top_);
-    // println!("Top Ten {:#?}", top_.len());
-
     for v in rest.iter() {
         out_lines_csv.push(format!("{}, {}, -, -, -, -,\n", v.0, v.1));
     }
@@ -132,6 +128,8 @@ async fn main() -> Result<()> {
     for l in out_lines_csv {
         if let Ok(_) = write!(outfile, "{}", l) {}
     }
+
+    println!("Analyzed {} files with {} total lines and {} unique addresses.", total_files, total_lines, address_vec.len());
 
     Ok(())
 }
